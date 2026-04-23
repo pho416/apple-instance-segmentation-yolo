@@ -2088,32 +2088,31 @@ class MSBlock(nn.Module):
     """
     Multi-Scale Convolutional Attention Module (MSBlock)
     """
-    def __init__(self, c1, c2, n=3, e=1.0):
+    def __init__(self, c1, c2, n=1, branches=4):
         super().__init__()
-        self.n = n
-        self.c_ = int(c2 * e)
+        self.branches = branches
+        self.c_ = c2 // branches
         # Channel expansion
-        self.expand_conv = Conv(c1, n * self.c_, 1, 1)
+        self.expand_conv = Conv(c1, self.c_ * branches, 1, 1)
         
         # Inverted bottleneck branches with varying kernel sizes
-        self.ibs = nn.ModuleList()
-        for i in range(n - 1):
-            k = 3 + 2 * i  # Large kernels: 3, 5, ...
-            self.ibs.append(InvertedBottleneck(self.c_, k=k))
+        self.ibs = nn.ModuleList([
+            InvertedBottleneck(self.c_, k=3 + 2 * i) for i in range(branches - 1)
+        ])
             
         # Feature fusion projection
-        self.project_conv = Conv(n * self.c_, c2, 1, 1)
+        self.project_conv = Conv(self.c_ * branches, c2, 1, 1)
 
     def forward(self, x):
         # The expanded features are evenly divided into n groups along the channel dimension [cite: 221, 222]
         x = self.expand_conv(x)
-        splits = torch.chunk(x, self.n, dim=1)
+        splits = torch.chunk(x, self.branches, dim=1)
         
         # The first group serves directly as a cross-stage connection [cite: 224]
         out = [splits[0]]
         
         # The remaining groups undergo fusion with the output from the previous group [cite: 224, 225]
-        for i in range(self.n - 1):
+        for i in range(self.branches - 1):
             fused = out[-1] + splits[i + 1]
             out.append(self.ibs[i](fused))
             
@@ -2163,7 +2162,7 @@ class PCSA(nn.Module):
         super().__init__()
         self.pool = nn.AdaptiveAvgPool2d(1)
         # Depthwise separable convolution for linear projection [cite: 271]
-        self.qkv = nn.Conv2d(c, c * 3, 1, groups=c, bias=False)
+        self.qkv = nn.Conv2d(c, c * 3, 1, 1, 0, bias=False)
         self.gn = nn.GroupNorm(1, c)
         
     def forward(self, x_s):
@@ -2179,7 +2178,7 @@ class PCSA(nn.Module):
         
         # Single-head self-attention mechanism along the channel dimension [cite: 277, 278]
         attn = torch.bmm(q, k.transpose(1, 2)) / (c ** 0.5)
-        attn = torch.softmax(attn, dim=2)
+        attn = torch.softmax(attn, dim=-1)
         
         v_out = torch.bmm(attn, v).view(b, c, 1, 1)
         
@@ -2193,9 +2192,8 @@ class SCSA(nn.Module):
     Spatial and Channel Synergistic Attention Module (SCSA)
     Integrates Shared Multi-Semantic Spatial Attention (SMSA) and Progressive Channel Self-Attention (PCSA) [cite: 254]
     """
-    def __init__(self, c1, c2=None):
+    def __init__(self, c1, c2, n=1):
         super().__init__()
-        c2 = c2 or c1
         self.smsa = SMSA(c1)
         self.pcsa = PCSA(c1)
         self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()

@@ -2072,8 +2072,10 @@ class RealNVP(nn.Module):
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
 
+
 class InvertedBottleneck(nn.Module):
     """Inverted Bottleneck block with large kernel for MSBlock."""
+
     def __init__(self, c, k=3):
         super().__init__()
         self.cv1 = Conv(c, c * 2, 1, 1)
@@ -2085,21 +2087,18 @@ class InvertedBottleneck(nn.Module):
 
 
 class MSBlock(nn.Module):
-    """
-    Multi-Scale Convolutional Attention Module (MSBlock)
-    """
+    """Multi-Scale Convolutional Attention Module (MSBlock)."""
+
     def __init__(self, c1, c2, n=1, branches=4):
         super().__init__()
         self.branches = branches
         self.c_ = c2 // branches
         # Channel expansion
         self.expand_conv = Conv(c1, self.c_ * branches, 1, 1)
-        
+
         # Inverted bottleneck branches with varying kernel sizes
-        self.ibs = nn.ModuleList([
-            InvertedBottleneck(self.c_, k=3 + 2 * i) for i in range(branches - 1)
-        ])
-            
+        self.ibs = nn.ModuleList([InvertedBottleneck(self.c_, k=3 + 2 * i) for i in range(branches - 1)])
+
         # Feature fusion projection
         self.project_conv = Conv(self.c_ * branches, c2, 1, 1)
 
@@ -2107,97 +2106,101 @@ class MSBlock(nn.Module):
         # The expanded features are evenly divided into n groups along the channel dimension [cite: 221, 222]
         x = self.expand_conv(x)
         splits = torch.chunk(x, self.branches, dim=1)
-        
+
         # The first group serves directly as a cross-stage connection [cite: 224]
         out = [splits[0]]
-        
+
         # The remaining groups undergo fusion with the output from the previous group [cite: 224, 225]
         for i in range(self.branches - 1):
             fused = out[-1] + splits[i + 1]
             out.append(self.ibs[i](fused))
-            
+
         return self.project_conv(torch.cat(out, dim=1))
 
 
 class SMSA(nn.Module):
-    """Shared Multi-Semantic Spatial Attention"""
+    """Shared Multi-Semantic Spatial Attention."""
+
     def __init__(self, c, k_groups=4):
         super().__init__()
         self.k_groups = k_groups
         self.c_per_group = c // k_groups
         kernels = [3, 5, 7, 9]
-        
+
         # Depthwise 1D Convs for each group
-        self.convs = nn.ModuleList([
-            nn.Conv1d(self.c_per_group, self.c_per_group, kernel_size=k, padding=k//2, groups=self.c_per_group)
-            for k in kernels[:k_groups]
-        ])
+        self.convs = nn.ModuleList(
+            [
+                nn.Conv1d(self.c_per_group, self.c_per_group, kernel_size=k, padding=k // 2, groups=self.c_per_group)
+                for k in kernels[:k_groups]
+            ]
+        )
         self.gn_h = nn.GroupNorm(k_groups, c)
         self.gn_w = nn.GroupNorm(k_groups, c)
-        
+
     def forward(self, x):
-        b, c, h, w = x.shape
+        _b, _c, _h, _w = x.shape
         # Global average pooling along spatial dimensions separately [cite: 255, 256]
         x_h = x.mean(dim=3)  # [b, c, h]
         x_w = x.mean(dim=2)  # [b, c, w]
-        
+
         # Partitioned along the channel dimension into K sub-features [cite: 257]
         x_h_splits = torch.chunk(x_h, self.k_groups, dim=1)
         x_w_splits = torch.chunk(x_w, self.k_groups, dim=1)
-        
+
         # Processed using depthwise separable 1D convolutions with distinct kernel sizes [cite: 258]
         out_h = torch.cat([conv(split) for conv, split in zip(self.convs, x_h_splits)], dim=1)
         out_w = torch.cat([conv(split) for conv, split in zip(self.convs, x_w_splits)], dim=1)
-        
-        attn_h = torch.sigmoid(self.gn_h(out_h)).unsqueeze(3) # [b, c, h, 1]
-        attn_w = torch.sigmoid(self.gn_w(out_w)).unsqueeze(2) # [b, c, 1, w]
-        
+
+        attn_h = torch.sigmoid(self.gn_h(out_h)).unsqueeze(3)  # [b, c, h, 1]
+        attn_w = torch.sigmoid(self.gn_w(out_w)).unsqueeze(2)  # [b, c, 1, w]
+
         # The spatial attention map performs element-wise weighting [cite: 266, 267]
         return x * attn_h * attn_w
 
 
 class PCSA(nn.Module):
-    """Progressive Channel Self-Attention"""
+    """Progressive Channel Self-Attention."""
+
     def __init__(self, c):
         super().__init__()
         self.pool = nn.AdaptiveAvgPool2d(1)
         # Depthwise separable convolution for linear projection [cite: 271]
         self.qkv = nn.Conv2d(c, c * 3, 1, 1, 0, bias=False)
         self.gn = nn.GroupNorm(1, c)
-        
+
     def forward(self, x_s):
-        b, c, h, w = x_s.shape
+        b, c, _h, _w = x_s.shape
         # Spatial dimension reduction via pooling [cite: 271]
-        x_pool = self.pool(x_s) # [b, c, 1, 1]
-        
+        x_pool = self.pool(x_s)  # [b, c, 1, 1]
+
         # Producing the query (Q), key (K), and value (V) vectors [cite: 271, 272]
-        qkv = self.qkv(x_pool).view(b, 3, c) # [b, 3, c]
-        q = qkv[:, 0].unsqueeze(2) # [b, c, 1]
-        k = qkv[:, 1].unsqueeze(2) # [b, c, 1]
-        v = qkv[:, 2].unsqueeze(2) # [b, c, 1]
-        
+        qkv = self.qkv(x_pool).view(b, 3, c)  # [b, 3, c]
+        q = qkv[:, 0].unsqueeze(2)  # [b, c, 1]
+        k = qkv[:, 1].unsqueeze(2)  # [b, c, 1]
+        v = qkv[:, 2].unsqueeze(2)  # [b, c, 1]
+
         # Single-head self-attention mechanism along the channel dimension [cite: 277, 278]
-        attn = torch.bmm(q, k.transpose(1, 2)) / (c ** 0.5)
+        attn = torch.bmm(q, k.transpose(1, 2)) / (c**0.5)
         attn = torch.softmax(attn, dim=-1)
-        
+
         v_out = torch.bmm(attn, v).view(b, c, 1, 1)
-        
+
         channel_weights = torch.sigmoid(self.gn(v_out))
         # Reweight the spatially enhanced features [cite: 279, 280]
         return x_s * channel_weights
 
 
 class SCSA(nn.Module):
+    """Spatial and Channel Synergistic Attention Module (SCSA) Integrates Shared Multi-Semantic Spatial Attention (SMSA)
+    and Progressive Channel Self-Attention (PCSA) [cite: 254].
     """
-    Spatial and Channel Synergistic Attention Module (SCSA)
-    Integrates Shared Multi-Semantic Spatial Attention (SMSA) and Progressive Channel Self-Attention (PCSA) [cite: 254]
-    """
+
     def __init__(self, c1, c2, n=1):
         super().__init__()
         self.smsa = SMSA(c1)
         self.pcsa = PCSA(c1)
         self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
-        
+
     def forward(self, x):
         x_s = self.smsa(x)
         x_c = self.pcsa(x_s)

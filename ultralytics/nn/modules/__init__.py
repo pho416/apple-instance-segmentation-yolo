@@ -27,6 +27,7 @@ from .block import (
     DFL,
     ELAN1,
     PSA,
+    SCSA,
     SPP,
     SPPELAN,
     SPPF,
@@ -52,6 +53,7 @@ from .block import (
     HGStem,
     ImagePoolingAttn,
     MaxSigmoidAttnBlock,
+    MSBlock,
     Proto,
     RepC3,
     RepNCSPELAN4,
@@ -59,8 +61,6 @@ from .block import (
     ResNetLayer,
     SCDown,
     TorchVision,
-    MSBlock,
-    SCSA
 )
 from .conv import (
     CBAM,

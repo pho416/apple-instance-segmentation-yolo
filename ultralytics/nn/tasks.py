@@ -22,6 +22,7 @@ from ultralytics.nn.modules import (
     OBB,
     OBB26,
     PSA,
+    SCSA,
     SPP,
     SPPELAN,
     SPPF,
@@ -55,6 +56,7 @@ from ultralytics.nn.modules import (
     ImagePoolingAttn,
     Index,
     LRPCHead,
+    MSBlock,
     Pose,
     Pose26,
     RepC3,
@@ -72,8 +74,6 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    MSBlock,
-    SCSA,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, WINDOWS, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
